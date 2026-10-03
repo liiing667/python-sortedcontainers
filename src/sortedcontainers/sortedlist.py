@@ -20,11 +20,43 @@ import traceback
 from bisect import bisect_left, bisect_right, insort
 from collections.abc import MutableSequence, Sequence
 from functools import reduce
-from itertools import chain, repeat, starmap
+from heapq import merge
+from itertools import chain, groupby, repeat, starmap
 from math import log
-from operator import add, eq, ge, gt, iadd, le, lt, ne
+from operator import add, eq, ge, gt, iadd, itemgetter, le, lt, ne
 from reprlib import recursive_repr
 from textwrap import dedent
+
+
+def _value_groups(values, key, operand_index):
+    "Yield (group-key, operand-index, group-values) triples from sorted values."
+    for group_key, group in groupby(values, key):
+        yield group_key, operand_index, list(group)
+
+
+def _union_counts(counts):
+    "Combine multiplicities by maximum for multiset union."
+    count = max(counts)
+    return count, counts.index(count)
+
+
+def _intersection_counts(counts):
+    "Combine multiplicities by minimum for multiset intersection."
+    count = min(counts)
+    return count, counts.index(count)
+
+
+def _difference_counts(counts):
+    "Combine multiplicities by subtraction, floored at zero, for difference."
+    count = counts[0] - sum(counts[1:])
+    return max(count, 0), 0
+
+
+def _symmetric_difference_counts(counts):
+    "Combine multiplicities by absolute difference for symmetric difference."
+    if counts[0] >= counts[1]:
+        return counts[0] - counts[1], 0
+    return counts[1] - counts[0], 1
 
 
 class SortedList(MutableSequence):
@@ -67,6 +99,13 @@ class SortedList(MutableSequence):
     * :func:`SortedList.islice`
     * :func:`SortedList.__iter__`
     * :func:`SortedList.__reversed__`
+
+    Methods for multiset operations:
+
+    * :func:`SortedList.union`
+    * :func:`SortedList.intersection`
+    * :func:`SortedList.difference`
+    * :func:`SortedList.symmetric_difference`
 
     Methods for miscellany:
 
@@ -1449,6 +1488,167 @@ class SortedList(MutableSequence):
         self._update(values)
         return self
 
+    def _multiset_combine(self, iterables, combine_counts):
+        """Return sorted values combining the multiplicities of all operands.
+
+        Values in the sorted list and `iterables` are grouped by key and the
+        multiplicities of each group are combined by `combine_counts`. That
+        function receives a list of integer counts, one per operand, and
+        returns a pair: the resulting count and the index of the operand from
+        which to source values.
+
+        Sorted-list operands with a matching key function are already sorted
+        so their sublists are concatenated directly. Other iterables are
+        sorted once. Groups are combined with a k-way merge so the runtime is
+        linear in the total number of values. The result is bulk-loaded into
+        sublists by the caller's constructor, maintaining the load-factor
+        invariants.
+
+        :param iterables: tuple of iterables to combine with
+        :param combine_counts: function to combine group multiplicities
+        :return: list of values in sorted order
+
+        """
+        key = self.key
+        operands = (self,) + iterables
+
+        streams = []
+
+        for operand_index, operand in enumerate(operands):
+            if isinstance(operand, SortedList) and operand.key == key:
+                # Operand is already sorted: concatenate sublists directly.
+                values = reduce(iadd, operand._lists, [])
+            else:
+                values = sorted(operand, key=key)
+            stream = _value_groups(values, key, operand_index)
+            streams.append(stream)
+
+        values = []
+        extend = values.extend
+        merged = merge(*streams, key=itemgetter(0))
+
+        for _, group in groupby(merged, itemgetter(0)):
+            counts = [0] * len(operands)
+            sources = [None] * len(operands)
+
+            for _, operand_index, group_values in group:
+                counts[operand_index] = len(group_values)
+                sources[operand_index] = group_values
+
+            count, source = combine_counts(counts)
+
+            if count:
+                extend(sources[source][:count])
+
+        return values
+
+    def union(self, *iterables):
+        """Return new sorted list with the union of values as a multiset.
+
+        The multiplicity of each value in the result is the maximum of its
+        multiplicities in the sorted list and each of the `iterables`.
+
+        The `union` method also corresponds to operator ``|``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> sl = SortedList('aabbc')
+        >>> sl.union('bccdd')
+        SortedList(['a', 'a', 'b', 'b', 'c', 'c', 'd', 'd'])
+        >>> sl.union('bcc', 'cdd')
+        SortedList(['a', 'a', 'b', 'b', 'c', 'c', 'd', 'd'])
+        >>> sl | 'bccdd'
+        SortedList(['a', 'a', 'b', 'b', 'c', 'c', 'd', 'd'])
+
+        :param iterables: iterables to union with the sorted list
+        :return: new sorted list
+
+        """
+        values = self._multiset_combine(iterables, _union_counts)
+        return self.__class__(values)
+
+    __or__ = union
+
+    def intersection(self, *iterables):
+        """Return new sorted list with the intersection of values as a multiset.
+
+        The multiplicity of each value in the result is the minimum of its
+        multiplicities in the sorted list and each of the `iterables`.
+
+        The `intersection` method also corresponds to operator ``&``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> sl = SortedList('aabbc')
+        >>> sl.intersection('bccdd')
+        SortedList(['b', 'c'])
+        >>> sl.intersection('abbc', 'bbbc')
+        SortedList(['b', 'b', 'c'])
+        >>> sl & 'bccdd'
+        SortedList(['b', 'c'])
+
+        :param iterables: iterables to intersect with the sorted list
+        :return: new sorted list
+
+        """
+        values = self._multiset_combine(iterables, _intersection_counts)
+        return self.__class__(values)
+
+    __and__ = intersection
+
+    def difference(self, *iterables):
+        """Return new sorted list with the difference of values as a multiset.
+
+        The multiplicity of each value in the result is its multiplicity in
+        the sorted list minus the sum of its multiplicities in the
+        `iterables`, floored at zero.
+
+        The `difference` method also corresponds to operator ``-``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> sl = SortedList('aabbc')
+        >>> sl.difference('bccdd')
+        SortedList(['a', 'a', 'b'])
+        >>> sl.difference('ab', 'bc')
+        SortedList(['a'])
+        >>> sl - 'bccdd'
+        SortedList(['a', 'a', 'b'])
+
+        :param iterables: iterables to subtract from the sorted list
+        :return: new sorted list
+
+        """
+        values = self._multiset_combine(iterables, _difference_counts)
+        return self.__class__(values)
+
+    __sub__ = difference
+
+    def symmetric_difference(self, other):
+        """Return new sorted list with the symmetric difference of values.
+
+        The multiplicity of each value in the result is the absolute
+        difference of its multiplicities in the sorted list and `other`.
+
+        The `symmetric_difference` method also corresponds to operator ``^``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> sl = SortedList('aabbc')
+        >>> sl.symmetric_difference('bccdd')
+        SortedList(['a', 'a', 'b', 'c', 'd', 'd'])
+        >>> sl ^ 'bccdd'
+        SortedList(['a', 'a', 'b', 'c', 'd', 'd'])
+
+        :param other: other iterable
+        :return: new sorted list
+
+        """
+        values = self._multiset_combine((other,), _symmetric_difference_counts)
+        return self.__class__(values)
+
+    __xor__ = symmetric_difference
+
     def __make_cmp(seq_op, symbol, doc):
         "Make comparator method."
 
@@ -2426,6 +2626,115 @@ class SortedKeyList(SortedList):
         """
         values = reduce(iadd, self._lists, []) * num
         return self.__class__(values, key=self._key)
+
+    def union(self, *iterables):
+        """Return new sorted-key list with the union of values as a multiset.
+
+        The multiplicity of each key in the result is the maximum of its
+        multiplicities in the sorted-key list and each of the `iterables`.
+        The same key function is used to compare values.
+
+        The `union` method also corresponds to operator ``|``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> from operator import neg
+        >>> skl = SortedKeyList([5, 4, 4, 3], key=neg)
+        >>> skl.union([4, 3, 3, 2])
+        SortedKeyList([5, 4, 4, 3, 3, 2], key=<built-in function neg>)
+        >>> skl | [4, 3, 3, 2]
+        SortedKeyList([5, 4, 4, 3, 3, 2], key=<built-in function neg>)
+
+        :param iterables: iterables to union with the sorted-key list
+        :return: new sorted-key list
+
+        """
+        values = self._multiset_combine(iterables, _union_counts)
+        return self.__class__(values, key=self._key)
+
+    __or__ = union
+
+    def intersection(self, *iterables):
+        """Return new sorted-key list with the intersection as a multiset.
+
+        The multiplicity of each key in the result is the minimum of its
+        multiplicities in the sorted-key list and each of the `iterables`.
+        The same key function is used to compare values.
+
+        The `intersection` method also corresponds to operator ``&``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> from operator import neg
+        >>> skl = SortedKeyList([5, 4, 4, 3], key=neg)
+        >>> skl.intersection([4, 3, 3, 2])
+        SortedKeyList([4, 3], key=<built-in function neg>)
+        >>> skl & [4, 3, 3, 2]
+        SortedKeyList([4, 3], key=<built-in function neg>)
+
+        :param iterables: iterables to intersect with the sorted-key list
+        :return: new sorted-key list
+
+        """
+        values = self._multiset_combine(iterables, _intersection_counts)
+        return self.__class__(values, key=self._key)
+
+    __and__ = intersection
+
+    def difference(self, *iterables):
+        """Return new sorted-key list with the difference of values.
+
+        The multiplicity of each key in the result is its multiplicity in
+        the sorted-key list minus the sum of its multiplicities in the
+        `iterables`, floored at zero. The same key function is used to
+        compare values.
+
+        The `difference` method also corresponds to operator ``-``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> from operator import neg
+        >>> skl = SortedKeyList([5, 4, 4, 3], key=neg)
+        >>> skl.difference([4, 3, 3, 2])
+        SortedKeyList([5, 4], key=<built-in function neg>)
+        >>> skl - [4, 3, 3, 2]
+        SortedKeyList([5, 4], key=<built-in function neg>)
+
+        :param iterables: iterables to subtract from the sorted-key list
+        :return: new sorted-key list
+
+        """
+        values = self._multiset_combine(iterables, _difference_counts)
+        return self.__class__(values, key=self._key)
+
+    __sub__ = difference
+
+    def symmetric_difference(self, other):
+        """Return new sorted-key list with the symmetric difference.
+
+        The multiplicity of each key in the result is the absolute
+        difference of its multiplicities in the sorted-key list and `other`.
+        The same key function is used to compare values.
+
+        The `symmetric_difference` method also corresponds to operator ``^``.
+
+        Runtime complexity: `O(n + k*log(k))` -- approximate.
+
+        >>> from operator import neg
+        >>> skl = SortedKeyList([5, 4, 4, 3], key=neg)
+        >>> skl.symmetric_difference([4, 3, 3, 2])
+        SortedKeyList([5, 4, 3, 2], key=<built-in function neg>)
+        >>> skl ^ [4, 3, 3, 2]
+        SortedKeyList([5, 4, 3, 2], key=<built-in function neg>)
+
+        :param other: other iterable
+        :return: new sorted-key list
+
+        """
+        values = self._multiset_combine((other,), _symmetric_difference_counts)
+        return self.__class__(values, key=self._key)
+
+    __xor__ = symmetric_difference
 
     def __reduce__(self):
         values = reduce(iadd, self._lists, [])

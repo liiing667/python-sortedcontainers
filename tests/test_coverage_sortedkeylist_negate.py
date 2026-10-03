@@ -678,3 +678,72 @@ def test_check():
     slt._len = 5
     with pytest.raises(AssertionError):
         slt._check()
+
+
+def test_multiset_ops():
+    skl = SortedKeyList([5, 4, 4, 3], key=negate)
+    other = [4, 3, 3, 2]
+
+    result = skl.union(other)
+    assert type(result) is SortedKeyList
+    assert result.key is negate
+    assert result == [5, 4, 4, 3, 3, 2]
+    result._check()
+
+    result = skl.intersection(other)
+    assert result.key is negate
+    assert result == [4, 3]
+    result._check()
+
+    result = skl.difference(other)
+    assert result.key is negate
+    assert result == [5, 4]
+    result._check()
+
+    result = skl.symmetric_difference(other)
+    assert result.key is negate
+    assert result == [5, 4, 3, 2]
+    result._check()
+
+    # Original sorted-key list is unchanged.
+    assert skl == [5, 4, 4, 3]
+
+    # Operators correspond to the multiset methods.
+    assert (skl | other) == [5, 4, 4, 3, 3, 2]
+    assert (skl & other) == [4, 3]
+    assert (skl - other) == [5, 4]
+    assert (skl ^ other) == [5, 4, 3, 2]
+
+    # A matching-key sorted-key list operand reuses sorted order.
+    other_skl = SortedKeyList(other, key=negate)
+    assert skl.union(other_skl) == [5, 4, 4, 3, 3, 2]
+
+
+def test_multiset_random():
+    import random
+    from collections import Counter
+
+    random.seed(0)
+    alpha = SortedKeyList((random.randrange(1000) for _ in range(2000)), key=negate)
+    beta = [random.randrange(1000) for _ in range(2000)]
+
+    alpha_counts = Counter(alpha)
+    beta_counts = Counter(beta)
+
+    result = alpha.union(beta)
+    assert list(result) == sorted((alpha_counts | beta_counts).elements(), key=negate)
+    assert result.key is negate
+    result._check()
+
+    result = alpha.intersection(beta)
+    assert list(result) == sorted((alpha_counts & beta_counts).elements(), key=negate)
+    result._check()
+
+    result = alpha.difference(beta)
+    assert list(result) == sorted((alpha_counts - beta_counts).elements(), key=negate)
+    result._check()
+
+    result = alpha.symmetric_difference(beta)
+    counts = (alpha_counts - beta_counts) + (beta_counts - alpha_counts)
+    assert list(result) == sorted(counts.elements(), key=negate)
+    result._check()

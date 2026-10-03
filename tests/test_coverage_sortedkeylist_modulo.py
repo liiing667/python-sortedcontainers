@@ -828,3 +828,77 @@ def test_check():
     slt._len = 5
     with pytest.raises(AssertionError):
         slt._check()
+
+
+def test_multiset_ops():
+    # Values are grouped by their key, so multiplicities compare values with
+    # equal keys.
+    skl = SortedKeyList([1, 11, 2, 12, 12], key=modulo)
+    other = [21, 22, 32]
+
+    result = skl.union(other)
+    assert type(result) is SortedKeyList
+    assert result.key == modulo
+    # Key 1: self has two (1, 11), other has one (21); max keeps self.
+    # Key 2: self has three (2, 12, 12), other has two (22, 32); max keeps self.
+    assert result == [1, 11, 2, 12, 12]
+    result._check()
+
+    result = skl.intersection(other)
+    # Minimum multiplicities sourced from the operand with the smaller count.
+    assert result == [21, 22, 32]
+    result._check()
+
+    result = skl.difference(other)
+    assert result == [1, 2]
+    result._check()
+
+    result = skl.symmetric_difference(other)
+    assert result == [1, 2]
+    result._check()
+
+    # Original sorted-key list is unchanged.
+    assert skl == [1, 11, 2, 12, 12]
+
+    # Operators correspond to the multiset methods.
+    assert (skl | other) == [1, 11, 2, 12, 12]
+    assert (skl & other) == [21, 22, 32]
+    assert (skl - other) == [1, 2]
+    assert (skl ^ other) == [1, 2]
+
+    # The larger operand sources the excess multiplicity.
+    more = [21, 31, 41, 22, 32]
+    assert skl.union(more) == [21, 31, 41, 2, 12, 12]
+    assert skl.symmetric_difference(more) == [21, 2]
+
+    # A sorted-list operand with a different key function is re-sorted.
+    assert skl.union(SortedList(other)) == [1, 11, 2, 12, 12]
+    result = skl.union(SortedKeyList(other, key=modulo))
+    assert result == [1, 11, 2, 12, 12]
+    result._check()
+
+
+def test_multiset_random():
+    import random
+    from collections import Counter
+
+    random.seed(0)
+    alpha = SortedKeyList((random.randrange(100) for _ in range(2000)), key=modulo)
+    beta = [random.randrange(100) for _ in range(2000)]
+
+    alpha_counts = Counter(map(modulo, alpha))
+    beta_counts = Counter(map(modulo, beta))
+
+    for result, counts in (
+        (alpha.union(beta), alpha_counts | beta_counts),
+        (alpha.intersection(beta), alpha_counts & beta_counts),
+        (alpha.difference(beta), alpha_counts - beta_counts),
+        (
+            alpha.symmetric_difference(beta),
+            (alpha_counts - beta_counts) + (beta_counts - alpha_counts),
+        ),
+    ):
+        # Result remains sorted by the key function and multiplicities match.
+        assert list(map(modulo, result)) == sorted(counts.elements())
+        assert result.key == modulo
+        result._check()

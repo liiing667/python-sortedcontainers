@@ -1,4 +1,5 @@
 import random
+from collections import Counter
 from sortedcontainers import SortedList
 from itertools import chain
 import pytest
@@ -672,3 +673,158 @@ def test_check():
     slt._len = 5
     with pytest.raises(AssertionError):
         slt._check()
+
+
+def test_union():
+    slt = SortedList('aabbc')
+
+    result = slt.union('bccdd')
+    assert type(result) is SortedList
+    assert result == SortedList('aabbccdd')
+    result._check()
+
+    # Original sorted list is unchanged.
+    assert slt == SortedList('aabbc')
+
+    # Multiple iterables are supported.
+    assert slt.union('bcc', 'cdd') == SortedList('aabbccdd')
+
+    # No iterables returns a copy.
+    result = slt.union()
+    assert result == slt
+    assert result is not slt
+
+    # Empty sorted list and empty iterables.
+    assert SortedList().union() == SortedList()
+    assert slt.union('') == slt
+
+    # Operands may be generators or sorted lists.
+    assert slt.union(iter('bccdd')) == SortedList('aabbccdd')
+    assert slt.union(SortedList('ddccb')) == SortedList('aabbccdd')
+
+    # Operator corresponds to union method.
+    assert (slt | 'bccdd') == SortedList('aabbccdd')
+
+
+def test_intersection():
+    slt = SortedList('aabbc')
+
+    result = slt.intersection('bccdd')
+    assert type(result) is SortedList
+    assert result == SortedList('bc')
+    result._check()
+
+    assert slt == SortedList('aabbc')
+
+    # Multiple iterables are supported.
+    assert slt.intersection('abbc', 'bbbc') == SortedList('bbc')
+
+    # No iterables returns a copy.
+    assert slt.intersection() == slt
+
+    # Empty intersection.
+    assert slt.intersection('dde') == SortedList()
+    assert SortedList().intersection('abc') == SortedList()
+
+    # Operator corresponds to intersection method.
+    assert (slt & 'bccdd') == SortedList('bc')
+
+
+def test_difference():
+    slt = SortedList('aabbc')
+
+    result = slt.difference('bccdd')
+    assert type(result) is SortedList
+    assert result == SortedList('aab')
+    result._check()
+
+    assert slt == SortedList('aabbc')
+
+    # Multiple iterables are subtracted cumulatively.
+    assert slt.difference('ab', 'bc') == SortedList('a')
+
+    # Multiplicities floor at zero.
+    assert slt.difference('aaaabbbbcc') == SortedList()
+
+    # No iterables returns a copy.
+    assert slt.difference() == slt
+
+    # Operator corresponds to difference method.
+    assert (slt - 'bccdd') == SortedList('aab')
+
+
+def test_symmetric_difference():
+    slt = SortedList('aabbc')
+
+    result = slt.symmetric_difference('bccdd')
+    assert type(result) is SortedList
+    assert result == SortedList('aabcdd')
+    result._check()
+
+    assert slt == SortedList('aabbc')
+
+    # Equal multiplicities cancel out.
+    assert slt.symmetric_difference('aabbcc') == SortedList('c')
+    assert slt.symmetric_difference(slt) == SortedList()
+
+    # Operator corresponds to symmetric_difference method.
+    assert (slt ^ 'bccdd') == SortedList('aabcdd')
+
+
+def test_multiset_random():
+    random.seed(0)
+
+    for _ in range(10):
+        alpha = SortedList(random.randrange(1000) for _ in range(1000))
+        beta = [random.randrange(1000) for _ in range(1000)]
+        gamma = SortedList(random.randrange(1000) for _ in range(1000))
+
+        alpha_counts = Counter(alpha)
+        beta_counts = Counter(beta)
+        gamma_counts = Counter(gamma)
+
+        result = alpha.union(beta, gamma)
+        counts = alpha_counts | beta_counts | gamma_counts
+        assert list(result) == sorted(counts.elements())
+        result._check()
+
+        result = alpha.intersection(beta, gamma)
+        counts = alpha_counts & beta_counts & gamma_counts
+        assert list(result) == sorted(counts.elements())
+        result._check()
+
+        result = alpha.difference(beta, gamma)
+        counts = alpha_counts - beta_counts - gamma_counts
+        assert list(result) == sorted(counts.elements())
+        result._check()
+
+        result = alpha.symmetric_difference(beta)
+        counts = (alpha_counts - beta_counts) + (beta_counts - alpha_counts)
+        assert list(result) == sorted(counts.elements())
+        result._check()
+
+
+def test_multiset_large():
+    random.seed(0)
+    alpha = SortedList(random.randrange(10**6) for _ in range(100000))
+    beta = SortedList(random.randrange(10**6) for _ in range(100000))
+
+    alpha_counts = Counter(alpha)
+    beta_counts = Counter(beta)
+
+    result = alpha.union(beta)
+    assert list(result) == sorted((alpha_counts | beta_counts).elements())
+    result._check()
+
+    result = alpha.intersection(beta)
+    assert list(result) == sorted((alpha_counts & beta_counts).elements())
+    result._check()
+
+    result = alpha.difference(beta)
+    assert list(result) == sorted((alpha_counts - beta_counts).elements())
+    result._check()
+
+    result = alpha.symmetric_difference(beta)
+    counts = (alpha_counts - beta_counts) + (beta_counts - alpha_counts)
+    assert list(result) == sorted(counts.elements())
+    result._check()
