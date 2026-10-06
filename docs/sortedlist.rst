@@ -30,6 +30,14 @@ SortedList
    .. automethod:: __iadd__
    .. automethod:: __mul__
    .. automethod:: __imul__
+   .. automethod:: union
+   .. automethod:: intersection
+   .. automethod:: difference
+   .. automethod:: symmetric_difference
+   .. automethod:: __or__
+   .. automethod:: __and__
+   .. automethod:: __sub__
+   .. automethod:: __xor__
    .. automethod:: __eq__
    .. automethod:: __ne__
    .. automethod:: __lt__

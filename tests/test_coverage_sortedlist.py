@@ -672,3 +672,143 @@ def test_check():
     slt._len = 5
     with pytest.raises(AssertionError):
         slt._check()
+
+
+def multiset_reference(first, others, op):
+    from collections import Counter
+
+    counts = [Counter(first)] + [Counter(other) for other in others]
+    values = set().union(*counts)
+    result = []
+
+    for value in values:
+        nums = [count.get(value, 0) for count in counts]
+
+        if op == 'union':
+            num = max(nums)
+        elif op == 'intersection':
+            num = min(nums)
+        elif op == 'difference':
+            num = max(0, nums[0] - sum(nums[1:]))
+        else:
+            num = abs(nums[0] - nums[1])
+
+        result.extend([value] * num)
+
+    return sorted(result)
+
+
+def test_union():
+    slt = SortedList([1, 1, 2, 3])
+    assert list(slt.union([1, 2, 2, 4])) == [1, 1, 2, 2, 3, 4]
+    assert list(slt.union()) == list(slt)
+    assert list(SortedList().union()) == []
+
+    random.seed(0)
+
+    for _ in range(100):
+        first = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        second = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        third = [random.randint(0, 15) for _ in range(random.randint(0, 50))]
+
+        result = first.union(second, third)
+        assert list(result) == multiset_reference(first, [second, third], 'union')
+        result._check()
+
+        result = first | second
+        assert list(result) == multiset_reference(first, [second], 'union')
+        result._check()
+
+        result = third | first
+        assert list(result) == multiset_reference(first, [third], 'union')
+        result._check()
+
+
+def test_intersection():
+    slt = SortedList([1, 1, 2, 2, 3])
+    assert list(slt.intersection([1, 2, 2, 2, 4])) == [1, 2, 2]
+    assert list(slt.intersection()) == list(slt)
+    assert list(slt.intersection([])) == []
+
+    random.seed(0)
+
+    for _ in range(100):
+        first = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        second = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        third = [random.randint(0, 15) for _ in range(random.randint(0, 50))]
+
+        result = first.intersection(second, third)
+        assert list(result) == multiset_reference(
+            first, [second, third], 'intersection'
+        )
+        result._check()
+
+        result = first & second
+        assert list(result) == multiset_reference(first, [second], 'intersection')
+        result._check()
+
+        result = third & first
+        assert list(result) == multiset_reference(first, [third], 'intersection')
+        result._check()
+
+
+def test_difference():
+    slt = SortedList([1, 1, 2, 2, 3])
+    assert list(slt.difference([1, 2, 2, 4])) == [1, 3]
+    assert list(slt.difference()) == list(slt)
+    assert list(slt.difference([1, 1, 2, 2, 3, 4])) == []
+
+    random.seed(0)
+
+    for _ in range(100):
+        first = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        second = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        third = [random.randint(0, 15) for _ in range(random.randint(0, 50))]
+
+        result = first.difference(second, third)
+        assert list(result) == multiset_reference(first, [second, third], 'difference')
+        result._check()
+
+        result = first - second
+        assert list(result) == multiset_reference(first, [second], 'difference')
+        result._check()
+
+
+def test_symmetric_difference():
+    slt = SortedList([1, 1, 2, 3])
+    assert list(slt.symmetric_difference([1, 2, 2, 2, 4])) == [1, 2, 2, 3, 4]
+    assert list(slt.symmetric_difference([])) == list(slt)
+
+    random.seed(0)
+
+    for _ in range(100):
+        first = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+        second = SortedList(random.randint(0, 15) for _ in range(random.randint(0, 50)))
+
+        result = first.symmetric_difference(second)
+        assert list(result) == multiset_reference(
+            first, [second], 'symmetric_difference'
+        )
+        result._check()
+
+        result = first ^ second
+        assert list(result) == multiset_reference(
+            first, [second], 'symmetric_difference'
+        )
+        result._check()
+
+        result = list(second) ^ first
+        assert list(result) == multiset_reference(
+            first, [second], 'symmetric_difference'
+        )
+        result._check()
+
+
+def test_multiset_load():
+    slt = SortedList(range(1000))
+    slt._reset(64)
+
+    result = slt.union(SortedList(range(500, 1500)))
+    assert result._load == 64
+    assert list(result) == list(range(1500))
+    result._check()

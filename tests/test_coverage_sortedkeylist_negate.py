@@ -678,3 +678,75 @@ def test_check():
     slt._len = 5
     with pytest.raises(AssertionError):
         slt._check()
+
+
+def multiset_reference(first, others, op):
+    from collections import Counter
+
+    counts = [Counter(first)] + [Counter(other) for other in others]
+    values = set().union(*counts)
+    result = []
+
+    for value in values:
+        nums = [count.get(value, 0) for count in counts]
+
+        if op == 'union':
+            num = max(nums)
+        elif op == 'intersection':
+            num = min(nums)
+        elif op == 'difference':
+            num = max(0, nums[0] - sum(nums[1:]))
+        else:
+            num = abs(nums[0] - nums[1])
+
+        result.extend([value] * num)
+
+    return sorted(result)
+
+
+def test_multiset():
+    slt = SortedKeyList([1, 1, 2, 3], key=negate)
+    assert list(slt.union([1, 2, 2, 4])) == [4, 3, 2, 2, 1, 1]
+    assert list(slt.intersection([1, 2, 2, 2, 4])) == [2, 1]
+    assert list(slt.difference([1, 2, 2, 4])) == [3, 1]
+    assert list(slt.symmetric_difference([1, 2, 2, 2, 4])) == [4, 3, 2, 2, 1]
+
+    random.seed(0)
+
+    for _ in range(100):
+        first = SortedKeyList(
+            (random.randint(0, 15) for _ in range(random.randint(0, 50))), key=negate
+        )
+        second = SortedKeyList(
+            (random.randint(0, 15) for _ in range(random.randint(0, 50))), key=negate
+        )
+        third = [random.randint(0, 15) for _ in range(random.randint(0, 50))]
+
+        for op, result in (
+            ('union', first.union(second, third)),
+            ('intersection', first.intersection(second, third)),
+            ('difference', first.difference(second, third)),
+            ('symmetric_difference', first.symmetric_difference(second)),
+        ):
+            assert isinstance(result, SortedKeyList)
+            assert result.key is negate
+            assert sorted(result) == multiset_reference(
+                first, [second, third] if op != 'symmetric_difference' else [second], op
+            )
+            result._check()
+
+        for result in (first | second, first & second, first - second, first ^ second):
+            assert isinstance(result, SortedKeyList)
+            assert result.key is negate
+            result._check()
+
+        assert sorted(first | second) == multiset_reference(first, [second], 'union')
+        assert sorted(first & second) == multiset_reference(
+            first, [second], 'intersection'
+        )
+        assert sorted(first - second) == multiset_reference(
+            first, [second], 'difference'
+        )
+        assert sorted(first ^ second) == multiset_reference(
+            first, [second], 'symmetric_difference'
+        )

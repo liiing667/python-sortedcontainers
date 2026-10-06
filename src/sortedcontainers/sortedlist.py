@@ -20,7 +20,8 @@ import traceback
 from bisect import bisect_left, bisect_right, insort
 from collections.abc import MutableSequence, Sequence
 from functools import reduce
-from itertools import chain, repeat, starmap
+from heapq import heappop, heappush
+from itertools import chain, groupby, repeat, starmap
 from math import log
 from operator import add, eq, ge, gt, iadd, le, lt, ne
 from reprlib import recursive_repr
@@ -1448,6 +1449,228 @@ class SortedList(MutableSequence):
         self._clear()
         self._update(values)
         return self
+
+    def union(self, *iterables):
+        """Return new sorted list with the multiset union of `iterables`.
+
+        The multiset union keeps each value as many times as the maximum of
+        its multiplicities in the operands.
+
+        Runtime complexity: `O(n*log(n))`
+
+        >>> sl1 = SortedList([1, 1, 2, 3])
+        >>> sl2 = SortedList([1, 2, 2, 4])
+        >>> sl1.union(sl2)
+        SortedList([1, 1, 2, 2, 3, 4])
+
+        :param iterables: iterable arguments
+        :return: new sorted list
+
+        """
+        return self._multiset('union', iterables)
+
+    def intersection(self, *iterables):
+        """Return new sorted list with the multiset intersection of `iterables`.
+
+        The multiset intersection keeps each value as many times as the
+        minimum of its multiplicities in the operands.
+
+        Runtime complexity: `O(n*log(n))`
+
+        >>> sl1 = SortedList([1, 1, 2, 2, 3])
+        >>> sl2 = SortedList([1, 2, 2, 2, 4])
+        >>> sl1.intersection(sl2)
+        SortedList([1, 2, 2])
+
+        :param iterables: iterable arguments
+        :return: new sorted list
+
+        """
+        return self._multiset('intersection', iterables)
+
+    def difference(self, *iterables):
+        """Return new sorted list with the multiset difference of `iterables`.
+
+        Each value is kept as many times as its multiplicity in this sorted
+        list minus the sum of its multiplicities in each of the other
+        `iterables`, or zero if that result is negative.
+
+        Runtime complexity: `O(n*log(n))`
+
+        >>> sl1 = SortedList([1, 1, 2, 2, 3])
+        >>> sl2 = SortedList([1, 2, 2, 4])
+        >>> sl1.difference(sl2)
+        SortedList([1, 3])
+
+        :param iterables: iterable arguments
+        :return: new sorted list
+
+        """
+        return self._multiset('difference', iterables)
+
+    def symmetric_difference(self, other):
+        """Return new sorted list with the multiset symmetric difference.
+
+        Each value is kept as many times as the absolute difference between
+        its multiplicities in this sorted list and `other`.
+
+        Runtime complexity: `O(n*log(n))`
+
+        >>> sl1 = SortedList([1, 1, 2, 3])
+        >>> sl2 = SortedList([1, 2, 2, 2, 4])
+        >>> sl1.symmetric_difference(sl2)
+        SortedList([1, 2, 2, 3, 4])
+
+        :param other: other iterable
+        :return: new sorted list
+
+        """
+        return self._multiset('symmetric_difference', (other,))
+
+    def _multiset(self, op, iterables):
+        """Return a new sorted list from multiset operation `op`.
+
+        The operands are merged as sorted runs grouped by key using a heap
+        merge. Sorted-list operands with a compatible key are iterated over
+        their sublists directly and never inserted one value at a time;
+        plain iterables are sorted once. The resulting values are emitted in
+        sorted order and packed directly into sublists so that the `_lists`,
+        `_maxes` and `_index` invariants are preserved.
+
+        :param op: 'union', 'intersection', 'difference', or
+            'symmetric_difference'
+        :param iterables: iterable arguments
+        :return: new sorted list
+
+        """
+        self_key = self.key
+
+        group_key = identity if self_key is None else self_key
+
+        # Build one sorted run per operand. Sorted-list operands with a
+        # compatible key are already sorted and iterated lazily; anything
+        # else is sorted once.
+
+        runs = [groupby(self, group_key)]
+
+        for other in iterables:
+            if isinstance(other, SortedList) and other.key == self_key:
+                run = other
+            elif self_key is None:
+                run = sorted(other)
+            else:
+                run = sorted(other, key=self_key)
+            runs.append(groupby(run, group_key))
+
+        # Heap entries are (key, run-position, values) where values holds the
+        # operands of the next group of that run.
+
+        heap = []
+
+        for pos, groups in enumerate(runs):
+            group = next(groups, None)
+            if group is not None:
+                key, values = group
+                heappush(heap, (key, pos, list(values)))
+
+        total = len(runs)
+        load = self._load
+        keyed = self_key is not None
+
+        result = self.__class__(key=self_key)
+        result._load = load
+        result_lists = result._lists
+        result_keys = result._keys if keyed else None
+
+        chunk = []
+        chunk_keys = [] if keyed else None
+        result_len = 0
+
+        while heap:
+            key, pos, values = heappop(heap)
+            parts = [(pos, values)]
+
+            while heap and heap[0][0] == key:
+                _, pos, values = heappop(heap)
+                parts.append((pos, values))
+
+            for pos, _ in parts:
+                group = next(runs[pos], None)
+                if group is not None:
+                    next_key, next_values = group
+                    heappush(heap, (next_key, pos, list(next_values)))
+
+            if op == 'union':
+                count = max(len(values) for _, values in parts)
+            elif op == 'intersection':
+                if len(parts) == total:
+                    count = min(len(values) for _, values in parts)
+                else:
+                    count = 0
+            elif op == 'difference':
+                if parts[0][0] == 0:
+                    count = len(parts[0][1])
+                    rest = parts[1:]
+                else:
+                    count = 0
+                    rest = parts
+                for _, values in rest:
+                    count -= len(values)
+                if count < 0:
+                    count = 0
+            else:
+                count = len(parts[0][1])
+                if len(parts) > 1:
+                    other_count = len(parts[1][1])
+                    count = (
+                        count - other_count
+                        if count > other_count
+                        else other_count - count
+                    )
+
+            for _, values in parts:
+                if count <= 0:
+                    break
+                piece = values[:count]
+                count -= len(piece)
+                result_len += len(piece)
+                offset = 0
+
+                while offset < len(piece):
+                    room = load - len(chunk)
+                    take = room if room < len(piece) - offset else len(piece) - offset
+                    chunk.extend(piece[offset : offset + take])
+                    if keyed:
+                        chunk_keys.extend(repeat(key, take))
+                    offset += take
+                    if len(chunk) == load:
+                        result_lists.append(chunk)
+                        if keyed:
+                            result_keys.append(chunk_keys)
+                        chunk = []
+                        chunk_keys = [] if keyed else None
+
+        if chunk:
+            result_lists.append(chunk)
+            if keyed:
+                result_keys.append(chunk_keys)
+
+        result._len = result_len
+
+        if keyed:
+            result._maxes.extend(sublist[-1] for sublist in result_keys)
+        else:
+            result._maxes.extend(sublist[-1] for sublist in result_lists)
+
+        return result
+
+    __or__ = union
+    __ror__ = __or__
+    __and__ = intersection
+    __rand__ = __and__
+    __sub__ = difference
+    __xor__ = symmetric_difference
+    __rxor__ = __xor__
 
     def __make_cmp(seq_op, symbol, doc):
         "Make comparator method."
